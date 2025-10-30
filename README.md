@@ -48,7 +48,7 @@ The ring buffer implementation is based on the excellent [lwrb](https://github.c
 int main(void)
 {
     myUART_t myUart;
-    setup_uart(&myUart, &huart3);
+    setup_uart(&myUart, &huart3, 200, 100);
 
     while (1)
     {
@@ -58,12 +58,27 @@ int main(void)
 
 void uart_listener(void)
 {
-    if (!is_buffer_empty(&myUart))
+	static uint8_t first_read = 1;
+	uint32_t bytes = bytes_in_buffer(&myUart);
+    if (bytes > 0)
     {
-        uint8_t input[100] = {0};
-        int len = read_buffer_until(&myUart, '\n', input);
+    	if(first_read) {myUart.lwrb.r = myUart.lwrb.w; first_read = 0; return;}
 
-        send_uart(&myUart, "UART<< %s\n", input);
+        uint8_t input[100] = {0};
+        int len = read_buffer_until(&myUart, '\n', input, 100);
+
+        if(len > 0)
+        {
+        	if(input[0] == '^')
+			{
+				 char result[10][20] = {0};	//10 values of 20 characters
+				 int count = split_csv_string((char*)input, result, ",\r\n");
+				 UNUSED(count);
+				 __asm__("nop");
+			}
+
+			send_uart(&myUart, "UART<< %s\n", input);
+        }
     }
 }
 ```

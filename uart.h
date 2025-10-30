@@ -12,28 +12,33 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdarg.h>
 
 #include <lwrb.h>
 
-#define RING_BUFFER_SIZE 100
 
 typedef struct
 {
 	UART_HandleTypeDef *phuart;
 
+	uint32_t dma_buffer_size;
+	uint8_t *pDMABuffer;
+	
 	lwrb_t lwrb;
-	uint8_t ring_buffer[RING_BUFFER_SIZE];
+	uint32_t ring_buffer_size;
+	uint8_t *pRingBuffer;
 }myUART_t;
 
 
 
-void setup_uart(myUART_t * myUARTHander, UART_HandleTypeDef * huart);
+void setup_uart(myUART_t * myUARTHander, UART_HandleTypeDef * huart, uint32_t ring_buffer_size, uint32_t dma_buffer_size);
 
-uint8_t is_buffer_empty(myUART_t * myUARTHander);
-int read_buffer_until(myUART_t * myUARTHander, uint8_t terminator, uint8_t * res);
+uint32_t bytes_in_buffer(myUART_t * myUARTHander);
+int read_buffer_until(myUART_t * myUARTHander, uint8_t terminator, uint8_t * res, uint32_t res_size);
 
 void send_uart(myUART_t * myUARTHander, const char *format, ...);
+int split_csv_string(const char *input, char result[][20], const char *delimiter);
 
 
 
