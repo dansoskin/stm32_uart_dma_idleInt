@@ -33,11 +33,6 @@ The ring buffer implementation is based on the excellent [lwrb](https://github.c
 - **Memory increment:** Enabled
 - **Data width:** Byte
 
-### Buffer Sizes
-
-- **DMA buffer size:** Default is 100 bytes. Change `DMA_RX_BUFFER_SIZE` in `uart.c` to adjust.
-- **Ring buffer size:** Default is 100 bytes. Change `RING_BUFFER_SIZE` in `uart.h` to adjust.
-
 ---
 
 ## Usage Example
