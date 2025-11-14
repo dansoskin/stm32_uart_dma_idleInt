@@ -38,6 +38,7 @@ uint32_t bytes_in_buffer(myUART_t * myUARTHander);
 int read_buffer_until(myUART_t * myUARTHander, uint8_t terminator, uint8_t * res, uint32_t res_size);
 
 void send_uart(myUART_t * myUARTHander, const char *format, ...);
+void send_uart_dma(myUART_t * myUARTHander, const char *format, ...);
 int split_csv_string(const char *input, char result[][20], const char *delimiter);
 
 

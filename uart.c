@@ -16,6 +16,8 @@
 myUART_t * array_of_pointers[POINTER_ARRAY_SIZE] = {0};
 uint8_t array_of_pointers_idx = 0;
 
+volatile uint8_t sending_dma_busy = 0;
+
 
 //this is the general callback fired at any uart transaction
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
@@ -81,6 +83,22 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 		}
 	}
 
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+//	for(int i = 0; i < POINTER_ARRAY_SIZE; i++)
+//	{
+//		if(0 == array_of_pointers[i])
+//			break;
+//
+//		if(array_of_pointers[i]->phuart == huart)
+//		{
+//			array_of_pointers[i]->sending_dma_busy = 0;
+//		}
+//	}
+
+	sending_dma_busy = 0;
 }
 //---------------------------------------------------------------------------
 
@@ -169,6 +187,25 @@ void send_uart(myUART_t * myUARTHander, const char *format, ...)
 	va_end(args); // Clean up the va_list variable
 
 	HAL_UART_Transmit(myUARTHander->phuart, (uint8_t *) buffer, len, 0xFFFF);
+}
+
+void send_uart_dma(myUART_t * myUARTHander, const char *format, ...)
+{
+	static char buffer[256]; // Make static so it persists during DMA transfer
+	va_list args;
+
+	va_start(args, format);
+	int len = vsnprintf(buffer, sizeof(buffer), format, args);
+	va_end(args);
+	
+	// Ensure we don't exceed buffer size
+//	if (len >= sizeof(buffer)) {
+//		len = sizeof(buffer) - 1;
+//	}
+
+	while(sending_dma_busy) { __asm__("nop");}
+	sending_dma_busy = 1;
+	HAL_UART_Transmit_DMA(myUARTHander->phuart, (uint8_t *) buffer, len);
 }
 
 //----------------------------------------------------------------------------
