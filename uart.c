@@ -16,16 +16,12 @@
 myUART_t * array_of_pointers[POINTER_ARRAY_SIZE] = {0};
 uint8_t array_of_pointers_idx = 0;
 
-volatile uint8_t sending_dma_busy = 0;
-
 
 //this is the general callback fired at any uart transaction
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
 	if(Size == 0)
 		return;
-
-	HAL_UART_DMAStop(huart);
 
 	for(int i = 0; i < POINTER_ARRAY_SIZE; i++)
 	{
@@ -34,8 +30,18 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
 		if(array_of_pointers[i]->phuart == huart)
 		{
+			HAL_UART_RxEventTypeTypeDef event_type = HAL_UARTEx_GetRxEventType(huart);
+			if ((event_type == HAL_UART_RXEVENT_IDLE) && (Size >= array_of_pointers[i]->dma_buffer_size))
+			{
+				HAL_UART_DMAStop(huart);
+				HAL_UARTEx_ReceiveToIdle_DMA(huart, array_of_pointers[i]->pDMABuffer, array_of_pointers[i]->dma_buffer_size);
+				return;
+			}
+
+			HAL_UART_DMAStop(huart);
 			lwrb_write(&array_of_pointers[i]->lwrb, array_of_pointers[i]->pDMABuffer, Size);
 			HAL_UARTEx_ReceiveToIdle_DMA(huart, array_of_pointers[i]->pDMABuffer, array_of_pointers[i]->dma_buffer_size);
+			return;
 		}
 	}
 
@@ -87,39 +93,53 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-//	for(int i = 0; i < POINTER_ARRAY_SIZE; i++)
-//	{
-//		if(0 == array_of_pointers[i])
-//			break;
-//
-//		if(array_of_pointers[i]->phuart == huart)
-//		{
-//			array_of_pointers[i]->sending_dma_busy = 0;
-//		}
-//	}
+	for(int i = 0; i < POINTER_ARRAY_SIZE; i++)
+	{
+		if(0 == array_of_pointers[i])
+			break;
 
-	sending_dma_busy = 0;
+		if(array_of_pointers[i]->phuart == huart)
+		{
+			array_of_pointers[i]->tx_dma_busy = 0;
+			break;
+		}
+	}
 }
 //---------------------------------------------------------------------------
 
 
 
 //-----------------------------------------------------------------------
-void setup_uart(myUART_t * myUARTHander, UART_HandleTypeDef * huart, uint32_t ring_buffer_size, uint32_t dma_buffer_size)
+bool setup_uart(myUART_t * myUARTHander,
+		UART_HandleTypeDef * huart,
+		uint8_t * ring_buffer,
+		uint32_t ring_buffer_size,
+		uint8_t * dma_buffer,
+		uint32_t dma_buffer_size)
 {
+	if ((myUARTHander == NULL) || (huart == NULL) || (ring_buffer == NULL) || (dma_buffer == NULL)
+			|| (ring_buffer_size == 0U) || (dma_buffer_size == 0U) || (array_of_pointers_idx >= POINTER_ARRAY_SIZE))
+	{
+		return false;
+	}
+
 	myUARTHander->phuart = huart;
 	myUARTHander->ring_buffer_size = ring_buffer_size;
 	myUARTHander->dma_buffer_size = dma_buffer_size;
-
-	myUARTHander->pRingBuffer = malloc(ring_buffer_size);
-	myUARTHander->pDMABuffer = malloc(dma_buffer_size);
-
-	if((myUARTHander->pRingBuffer == NULL) || (myUARTHander->pDMABuffer == NULL))
-	{
-		while(1);	//error
-	}
+	myUARTHander->tx_dma_busy = 0;
+	memset(myUARTHander->tx_dma_buffer, 0, sizeof(myUARTHander->tx_dma_buffer));
+	
+	myUARTHander->pRingBuffer = ring_buffer;
+	myUARTHander->pDMABuffer = dma_buffer;
 	memset(myUARTHander->pRingBuffer, 0 , ring_buffer_size);
 	memset(myUARTHander->pDMABuffer, 0 , dma_buffer_size);
+
+	//--------------------- ring buffer
+	lwrb_init(&myUARTHander->lwrb, myUARTHander->pRingBuffer, myUARTHander->ring_buffer_size); // Initialize ring buffer
+
+	//--------------------- save to array
+	array_of_pointers[array_of_pointers_idx] = myUARTHander;
+	array_of_pointers_idx++;
 
 	__HAL_UART_CLEAR_OREFLAG(huart);
 	__HAL_UART_CLEAR_IDLEFLAG(huart);
@@ -133,12 +153,9 @@ void setup_uart(myUART_t * myUARTHander, UART_HandleTypeDef * huart, uint32_t ri
 //    __HAL_DMA_DISABLE_IT(phuart->hdmatx, DMA_IT_HT);
 //    __HAL_DMA_ENABLE_IT(phuart->hdmatx, DMA_IT_TC);
 
-	//--------------------- ring buffer
-	lwrb_init(&myUARTHander->lwrb, myUARTHander->pRingBuffer, myUARTHander->ring_buffer_size); // Initialize ring buffer
 
-	//--------------------- save to array
-	array_of_pointers[array_of_pointers_idx] = myUARTHander;
-	array_of_pointers_idx++;
+
+	return true;
 }
 
 //-------------------------------------------------------------------------
@@ -151,25 +168,32 @@ uint32_t bytes_in_buffer(myUART_t * myUARTHander)
 //returns number of bytes in result
 int read_buffer_until(myUART_t * myUARTHander, uint8_t terminator, uint8_t * res, uint32_t res_size)
 {
-	int total_items_in_buffer = lwrb_get_full(&myUARTHander->lwrb);
-	if(total_items_in_buffer)
+	if ((myUARTHander == NULL) || (res == NULL) || (res_size == 0U))
 	{
-		//if there's something in the buffer, peek inside the buffer
-		int peeked_number = lwrb_peek(&myUARTHander->lwrb, 0, res, total_items_in_buffer);
+		return 0;
+	}
 
-		//look for terminator character
-		int i;
-		for(i = 0; i < peeked_number; i++)
+	size_t total_items_in_buffer = lwrb_get_full(&myUARTHander->lwrb);
+	if(total_items_in_buffer > 0U)
+	{
+		size_t bytes_to_scan = total_items_in_buffer;
+		if (bytes_to_scan > res_size)
 		{
-			if(*(res + i) == terminator)  // Dereference the pointer to compare byte values
-				break;
+			bytes_to_scan = res_size;
 		}
 
-		if(i == total_items_in_buffer)
-			return 0;
+		size_t peeked_number = lwrb_peek(&myUARTHander->lwrb, 0, res, bytes_to_scan);
 
-		lwrb_skip(&myUARTHander->lwrb, i+1);
-		return i + 1;
+		for(size_t i = 0; i < peeked_number; i++)
+		{
+			if(res[i] == terminator)
+			{
+				size_t bytes_read = lwrb_read(&myUARTHander->lwrb, res, i + 1U);
+				return (int)bytes_read;
+			}
+		}
+
+		return 0;
 	}
 
 	return 0;
@@ -179,33 +203,64 @@ int read_buffer_until(myUART_t * myUARTHander, uint8_t terminator, uint8_t * res
 
 void send_uart(myUART_t * myUARTHander, const char *format, ...)
 {
-	char buffer[256]; // Adjust the buffer size as needed
+	char buffer[UART_TX_BUFFER_SIZE];
 	va_list args;     // Declare a variable of type va_list
 
 	va_start(args, format); // Initialize args to store all values after format
 	int len = vsnprintf(buffer, sizeof(buffer), format, args); // Format the string with the arguments
 	va_end(args); // Clean up the va_list variable
 
-	HAL_UART_Transmit(myUARTHander->phuart, (uint8_t *) buffer, len, 0xFFFF);
+	if (len < 0)
+	{
+		return;
+	}
+	if ((size_t)len >= sizeof(buffer))
+	{
+		len = (int)(sizeof(buffer) - 1U);
+	}
+
+	HAL_UART_Transmit(myUARTHander->phuart, (uint8_t *) buffer, (uint16_t)len, 0xFFFF);
 }
 
-void send_uart_dma(myUART_t * myUARTHander, const char *format, ...)
+HAL_StatusTypeDef send_uart_dma(myUART_t * myUARTHander, const char *format, ...)
 {
-	static char buffer[256]; // Make static so it persists during DMA transfer
+	if ((myUARTHander == NULL) || (myUARTHander->phuart == NULL) || (format == NULL))
+	{
+		return HAL_ERROR;
+	}
+
 	va_list args;
 
 	va_start(args, format);
-	int len = vsnprintf(buffer, sizeof(buffer), format, args);
+	int len = vsnprintf((char *)myUARTHander->tx_dma_buffer, sizeof(myUARTHander->tx_dma_buffer), format, args);
 	va_end(args);
-	
-	// Ensure we don't exceed buffer size
-//	if (len >= sizeof(buffer)) {
-//		len = sizeof(buffer) - 1;
-//	}
 
-	while(sending_dma_busy) { __asm__("nop");}
-	sending_dma_busy = 1;
-	HAL_UART_Transmit_DMA(myUARTHander->phuart, (uint8_t *) buffer, len);
+	if (len < 0)
+	{
+		return HAL_ERROR;
+	}
+	if ((size_t)len >= sizeof(myUARTHander->tx_dma_buffer))
+	{
+		len = (int)(sizeof(myUARTHander->tx_dma_buffer) - 1U);
+	}
+
+	uint32_t start_tick = HAL_GetTick();
+	while(myUARTHander->tx_dma_busy)
+	{
+		if ((HAL_GetTick() - start_tick) >= 1000U)
+		{
+			return HAL_TIMEOUT;
+		}
+	}
+
+	myUARTHander->tx_dma_busy = 1;
+	if (HAL_UART_Transmit_DMA(myUARTHander->phuart, myUARTHander->tx_dma_buffer, (uint16_t)len) != HAL_OK)
+	{
+		myUARTHander->tx_dma_busy = 0;
+		return HAL_ERROR;
+	}
+
+	return HAL_OK;
 }
 
 //----------------------------------------------------------------------------
@@ -239,3 +294,6 @@ int split_csv_string(const char *input, char result[][20], const char *delimiter
     free(input_copy);
     return count;
 }
+
+
+

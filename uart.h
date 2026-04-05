@@ -1,3 +1,6 @@
+
+
+
 /*
  * uart.h
  *
@@ -12,10 +15,13 @@
 
 #include <string.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <stdarg.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 #include <lwrb.h>
+
+#define UART_TX_BUFFER_SIZE 256U
 
 
 typedef struct
@@ -28,17 +34,24 @@ typedef struct
 	lwrb_t lwrb;
 	uint32_t ring_buffer_size;
 	uint8_t *pRingBuffer;
+
+	volatile uint8_t tx_dma_busy;
+	uint8_t tx_dma_buffer[UART_TX_BUFFER_SIZE];
 }myUART_t;
 
 
-
-void setup_uart(myUART_t * myUARTHander, UART_HandleTypeDef * huart, uint32_t ring_buffer_size, uint32_t dma_buffer_size);
+bool setup_uart(myUART_t * myUARTHander,
+		UART_HandleTypeDef * huart,
+		uint8_t * ring_buffer,
+		uint32_t ring_buffer_size,
+		uint8_t * dma_buffer,
+		uint32_t dma_buffer_size);
 
 uint32_t bytes_in_buffer(myUART_t * myUARTHander);
 int read_buffer_until(myUART_t * myUARTHander, uint8_t terminator, uint8_t * res, uint32_t res_size);
 
 void send_uart(myUART_t * myUARTHander, const char *format, ...);
-void send_uart_dma(myUART_t * myUARTHander, const char *format, ...);
+HAL_StatusTypeDef send_uart_dma(myUART_t * myUARTHander, const char *format, ...);
 int split_csv_string(const char *input, char result[][20], const char *delimiter);
 
 
