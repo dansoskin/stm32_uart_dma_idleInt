@@ -229,6 +229,27 @@ HAL_StatusTypeDef send_uart_dma(myUART_t * myUARTHander, const char *format, ...
 		return HAL_ERROR;
 	}
 
+	/* Wait for any transfer in flight to finish BEFORE touching the buffer.
+	 *
+	 * tx_dma_buffer is the very memory the DMA controller is reading from, so
+	 * formatting a new message into it mid-transfer rewrites the tail of the
+	 * message already going out and the receiver sees the two spliced together
+	 * -- five good bytes of one followed by the middle of the other. Waiting
+	 * after the vsnprintf, which is where this used to sit, is too late: the
+	 * corruption is done by the formatting, not by HAL_UART_Transmit_DMA.
+	 *
+	 * The cost is that a second caller blocks until the first message is out,
+	 * roughly the message length divided by the baud rate. Callers that must
+	 * never block should test tx_dma_busy and skip their turn instead. */
+	uint32_t start_tick = HAL_GetTick();
+	while(myUARTHander->tx_dma_busy)
+	{
+		if ((HAL_GetTick() - start_tick) >= 1000U)
+		{
+			return HAL_TIMEOUT;
+		}
+	}
+
 	va_list args;
 
 	va_start(args, format);
@@ -242,15 +263,6 @@ HAL_StatusTypeDef send_uart_dma(myUART_t * myUARTHander, const char *format, ...
 	if ((size_t)len >= sizeof(myUARTHander->tx_dma_buffer))
 	{
 		len = (int)(sizeof(myUARTHander->tx_dma_buffer) - 1U);
-	}
-
-	uint32_t start_tick = HAL_GetTick();
-	while(myUARTHander->tx_dma_busy)
-	{
-		if ((HAL_GetTick() - start_tick) >= 1000U)
-		{
-			return HAL_TIMEOUT;
-		}
 	}
 
 	myUARTHander->tx_dma_busy = 1;
