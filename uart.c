@@ -17,6 +17,29 @@ myUART_t * array_of_pointers[POINTER_ARRAY_SIZE] = {0};
 uint8_t array_of_pointers_idx = 0;
 
 
+/* Stop reception only. HAL_UART_DMAStop stops both directions: a transmission
+ * in flight is aborted without HAL_UART_TxCpltCallback ever being called, so
+ * tx_dma_busy stayed set for good and every send_uart_dma after it waited its
+ * full timeout and sent nothing. */
+static void uart_stop_rx(UART_HandleTypeDef *huart)
+{
+	if (huart->RxState == HAL_UART_STATE_BUSY_RX)
+	{
+		(void)HAL_UART_AbortReceive(huart);
+	}
+}
+
+/* A transmission can also end without its complete callback, e.g. on a TX DMA
+ * error. Once the HAL reports the transmitter idle, the flag is stale. */
+static void uart_clear_stale_tx(myUART_t *u)
+{
+	if (u->tx_dma_busy && (u->phuart->gState != HAL_UART_STATE_BUSY_TX))
+	{
+		u->tx_dma_busy = 0;
+	}
+}
+
+
 //this is the general callback fired at any uart transaction
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
@@ -33,12 +56,12 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 			HAL_UART_RxEventTypeTypeDef event_type = HAL_UARTEx_GetRxEventType(huart);
 			if ((event_type == HAL_UART_RXEVENT_IDLE) && (Size >= array_of_pointers[i]->dma_buffer_size))
 			{
-				HAL_UART_DMAStop(huart);
+				uart_stop_rx(huart);
 				HAL_UARTEx_ReceiveToIdle_DMA(huart, array_of_pointers[i]->pDMABuffer, array_of_pointers[i]->dma_buffer_size);
 				return;
 			}
 
-			HAL_UART_DMAStop(huart);
+			uart_stop_rx(huart);
 			lwrb_write(&array_of_pointers[i]->lwrb, array_of_pointers[i]->pDMABuffer, Size);
 			HAL_UARTEx_ReceiveToIdle_DMA(huart, array_of_pointers[i]->pDMABuffer, array_of_pointers[i]->dma_buffer_size);
 			return;
@@ -75,9 +98,9 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 	}
 	// Handle other error types as needed
 
-	HAL_UART_DMAStop(huart);
+	uart_stop_rx(huart);
 
-	//restart the DMA
+	//restart the reception; a transmission the error ended releases its flag
 	for(int i = 0; i < POINTER_ARRAY_SIZE; i++)
 	{
 		if(0 == array_of_pointers[i])
@@ -85,6 +108,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
 		if(array_of_pointers[i]->phuart == huart)
 		{
+			uart_clear_stale_tx(array_of_pointers[i]);
 			HAL_UARTEx_ReceiveToIdle_DMA(huart, array_of_pointers[i]->pDMABuffer, array_of_pointers[i]->dma_buffer_size);
 		}
 	}
@@ -222,6 +246,12 @@ void send_uart(myUART_t * myUARTHander, const char *format, ...)
 	HAL_UART_Transmit(myUARTHander->phuart, (uint8_t *) buffer, (uint16_t)len, 0xFFFF);
 }
 
+bool uart_tx_busy(myUART_t * myUARTHander)
+{
+	uart_clear_stale_tx(myUARTHander);
+	return myUARTHander->tx_dma_busy != 0;
+}
+
 HAL_StatusTypeDef send_uart_dma(myUART_t * myUARTHander, const char *format, ...)
 {
 	if ((myUARTHander == NULL) || (myUARTHander->phuart == NULL) || (format == NULL))
@@ -244,6 +274,9 @@ HAL_StatusTypeDef send_uart_dma(myUART_t * myUARTHander, const char *format, ...
 	uint32_t start_tick = HAL_GetTick();
 	while(myUARTHander->tx_dma_busy)
 	{
+		/* Busy only while the HAL is still sending; a flag left set by a
+		 * transfer that ended without its callback must not wedge the port. */
+		uart_clear_stale_tx(myUARTHander);
 		if ((HAL_GetTick() - start_tick) >= 1000U)
 		{
 			return HAL_TIMEOUT;

@@ -51,6 +51,10 @@ uint32_t bytes_in_buffer(myUART_t * myUARTHander);
 int read_buffer_until(myUART_t * myUARTHander, uint8_t terminator, uint8_t * res, uint32_t res_size);
 
 void send_uart(myUART_t * myUARTHander, const char *format, ...);
+/* Whether a DMA transmission is still in flight. Use this, not tx_dma_busy, to
+ * decide whether to skip a send: it also clears a flag left by a transfer that
+ * ended without its complete callback. */
+bool uart_tx_busy(myUART_t * myUARTHander);
 HAL_StatusTypeDef send_uart_dma(myUART_t * myUARTHander, const char *format, ...);
 int split_csv_string(const char *input, char result[][20], const char *delimiter);
 
